@@ -136,6 +136,14 @@ VALID_HOOKS: Set[str] = {
     "transform_llm_output",
     "pre_llm_call",
     "post_llm_call",
+    # Round-end stop gate. Fired once per turn, just before the agent accepts a
+    # final answer (after the verify-on-stop guard). A callback may keep the
+    # agent going instead of stopping by returning:
+    #   {"action": "continue", "message": "<follow-up instruction>"}
+    # The Claude-Code Stop shape {"decision": "block", "reason": "..."} (block
+    # the stop == keep going) is accepted too. Anything else lets the turn
+    # finish. The loop is bounded by agent.max_stop_nudges. See agent/stop_hooks.py.
+    "pre_stop",
     "pre_api_request",
     "post_api_request",
     "api_request_error",

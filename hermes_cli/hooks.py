@@ -139,6 +139,13 @@ _DEFAULT_PAYLOADS = {
         "model": "gpt-4",
         "platform": "cli",
     },
+    "pre_stop": {
+        "session_id": "test-session",
+        "platform": "cli",
+        "model": "gpt-4",
+        "final_response": "All done — the change is applied.",
+        "changed_paths": ["src/app.tsx"],
+    },
     "on_session_start": {"session_id": "test-session"},
     "on_session_end": {"session_id": "test-session"},
     "on_session_finalize": {"session_id": "test-session"},

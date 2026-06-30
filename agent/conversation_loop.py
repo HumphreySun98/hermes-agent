@@ -4810,6 +4810,44 @@ def run_conversation(
                                  agent._verification_stop_nudges)
                     continue
 
+                # General round-end gate: let a `pre_stop` hook (plugin or shell)
+                # keep the agent going — run a check, tidy the diff, run a skill —
+                # instead of accepting this answer. Bounded by agent.max_stop_nudges
+                # so a hook can't trap the loop; only fires when one is registered.
+                _stop_nudge = None
+                try:
+                    from agent.stop_hooks import max_stop_nudges, run_pre_stop_hooks
+                    from hermes_cli.plugins import has_hook
+
+                    if has_hook("pre_stop") and getattr(agent, "_pre_stop_nudges", 0) < max_stop_nudges():
+                        _stop_nudge = run_pre_stop_hooks(
+                            session_id=getattr(agent, "session_id", None),
+                            platform=getattr(agent, "platform", "") or "",
+                            model=getattr(agent, "model", "") or "",
+                            final_response=final_response,
+                            changed_paths=sorted(getattr(agent, "_turn_file_mutation_paths", set()) or []),
+                        )
+                except Exception:
+                    logger.debug("pre_stop hook check failed", exc_info=True)
+                    _stop_nudge = None
+
+                if _stop_nudge:
+                    agent._pre_stop_nudges = getattr(agent, "_pre_stop_nudges", 0) + 1
+                    final_msg["finish_reason"] = "stop_hook_continue"
+                    # Same alternation contract as verify-on-stop: keep the
+                    # attempted answer in history, follow it with a synthetic
+                    # user nudge, and don't surface the premature answer.
+                    messages.append(final_msg)
+                    messages.append({
+                        "role": "user",
+                        "content": _stop_nudge,
+                        "_pre_stop_synthetic": True,
+                    })
+                    agent._session_messages = messages
+                    logger.debug("pre_stop hook nudge issued (attempt %d)",
+                                 agent._pre_stop_nudges)
+                    continue
+
                 messages.append(final_msg)
                 
                 _turn_exit_reason = f"text_response(finish_reason={finish_reason})"

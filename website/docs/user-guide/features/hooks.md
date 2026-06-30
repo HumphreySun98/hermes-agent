@@ -382,6 +382,7 @@ def register(ctx):
 | [`post_tool_call`](#post_tool_call) | After any tool returns | ignored |
 | [`pre_llm_call`](#pre_llm_call) | Once per turn, before the tool-calling loop | `{"context": str}` to prepend context to the user message |
 | [`post_llm_call`](#post_llm_call) | Once per turn, after the tool-calling loop | ignored |
+| [`pre_stop`](#pre_stop) | Once per turn, just before the agent accepts a final answer | `{"action": "continue", "message": str}` to keep going |
 | [`on_session_start`](#on_session_start) | New session created (first turn only) | ignored |
 | [`on_session_end`](#on_session_end) | Session ends | ignored |
 | [`on_session_finalize`](#on_session_finalize) | CLI/gateway tears down an active session (flush, save, stats) | ignored |
@@ -649,6 +650,59 @@ def log_response_length(session_id, assistant_response, model, **kwargs):
 def register(ctx):
     ctx.register_hook("post_llm_call", log_response_length)
 ```
+
+---
+
+### `pre_stop`
+
+Fires **once per turn**, just before the agent accepts a final answer (after the built-in verify-on-stop guard). This is the round-end gate: a callback can keep the agent going — run a check, tidy the diff, run a skill — instead of letting it stop. The verify-on-stop guard is just one built-in reason to continue; `pre_stop` is the general one.
+
+**Callback signature:**
+
+```python
+def my_callback(session_id: str, platform: str, model: str,
+                final_response: str, changed_paths: list, **kwargs):
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_id` | `str` | Unique identifier for the current session |
+| `platform` | `str` | Where the session is running (`"cli"`, `"telegram"`, …) |
+| `model` | `str` | The model identifier |
+| `final_response` | `str` | The answer the agent is about to deliver |
+| `changed_paths` | `list` | Files the agent edited this turn (sorted) |
+
+**Fires:** In `agent/conversation_loop.py`, at the point the agent would accept a final answer, immediately after the verify-on-stop check. Only fires when at least one `pre_stop` hook is registered.
+
+**Return value — keep the agent going:**
+
+```python
+return {"action": "continue", "message": "Run the /clean skill on your changes, then finish."}
+```
+
+The `message` is appended as a synthetic user turn and the loop runs again. The Claude-Code Stop shape (`{"decision": "block", "reason": "..."}`, where blocking the stop means *keep going*) is accepted too. A directive with no message — or any other return — lets the turn finish.
+
+**Bounded:** consecutive continue directives in one turn are capped by `agent.max_stop_nudges` (default 3), so a hook that always says continue can never trap the loop. The attempted answer is kept in history but not surfaced to the user while the agent is being nudged.
+
+**Use cases:** enforce "always run the formatter / `/clean` skill before finishing," require green checks for certain paths, block "done" until a changelog entry exists, run a project-specific round-end checklist.
+
+**Example — always run a tidy skill before finishing a coding turn:**
+
+```python
+def tidy_before_stop(changed_paths, **kwargs):
+    if not changed_paths:
+        return None  # nothing edited — let it stop
+    return {
+        "action": "continue",
+        "message": "Before finishing: run the /clean skill on your changes, "
+                   "then summarize what you cleaned up.",
+    }
+
+def register(ctx):
+    ctx.register_hook("pre_stop", tidy_before_stop)
+```
+
+For a standing instruction that doesn't need to *gate* the stop, prefer `agent.coding_instructions` in `config.yaml` — it rides the coding brief and costs no extra turn.
 
 ---
 
@@ -1283,6 +1337,10 @@ Each time the event fires, Hermes spawns a subprocess for every matching hook (m
 
 // Inject context for pre_llm_call:
 {"context": "Today is Friday, 2026-04-17"}
+
+// Keep the agent going at round end (pre_stop); both shapes accepted:
+{"action": "continue", "message": "Run the formatter, then finish."}
+{"decision": "block",  "reason":  "Run the formatter, then finish."}
 
 // Silent no-op — any empty / non-matching output is fine:
 ```

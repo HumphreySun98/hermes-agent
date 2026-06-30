@@ -97,6 +97,24 @@ class TestParseResponse:
         )
         assert r is None
 
+    def test_pre_stop_continue_canonical(self):
+        r = shell_hooks._parse_response(
+            "pre_stop", '{"action": "continue", "message": "run /clean"}',
+        )
+        assert r == {"action": "continue", "message": "run /clean"}
+
+    def test_pre_stop_block_is_continue_claude_style(self):
+        # Claude-Code Stop hooks: block the stop == keep going; reason → message.
+        r = shell_hooks._parse_response(
+            "pre_stop", '{"decision": "block", "reason": "run the formatter"}',
+        )
+        assert r == {"action": "continue", "message": "run the formatter"}
+
+    def test_pre_stop_without_message_is_noop(self):
+        # A continue with nothing to tell the model lets the turn finish.
+        assert shell_hooks._parse_response("pre_stop", '{"action": "continue"}') is None
+        assert shell_hooks._parse_response("pre_stop", '{"decision": "allow"}') is None
+
     def test_block_action_without_message_uses_default(self):
         """Block is honored even when message/reason is absent."""
         r = shell_hooks._parse_response("pre_tool_call", '{"action": "block"}')

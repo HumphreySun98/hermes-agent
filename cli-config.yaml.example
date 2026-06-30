@@ -646,6 +646,20 @@ agent:
   # force it on or off; the HERMES_VERIFY_ON_STOP env var (1/0) takes precedence.
   # verify_on_stop: auto
 
+  # Standing operator instructions for the coding posture (when Hermes is in a
+  # code workspace). Appended to the coding brief as an extra system block, so
+  # you can pin project-wide workflow rules without editing the shipped brief.
+  # Accepts a string or a list of strings. Takes effect next session.
+  # coding_instructions:
+  #   - "For UI work, don't run tsc/lint until I approve the look."
+  #   - "Always run the /clean skill before you commit and push."
+
+  # A round-end `pre_stop` hook (plugin or shell, see Event Hooks docs) can keep
+  # the agent going instead of finishing — run a check, tidy the diff, run a
+  # skill. This caps how many times one turn may be nudged to continue, so a
+  # misbehaving stop hook can't trap the loop. Default 3.
+  # max_stop_nudges: 3
+
   # Enable verbose logging
   verbose: false
   
