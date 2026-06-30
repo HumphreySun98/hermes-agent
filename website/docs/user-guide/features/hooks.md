@@ -684,6 +684,8 @@ The `message` is appended as a synthetic user turn and the loop runs again. The 
 
 **Bounded:** consecutive continue directives in one turn are capped by `agent.max_stop_nudges` (default 3), so a hook that always says continue can never trap the loop. The attempted answer is kept in history but not surfaced to the user while the agent is being nudged.
 
+**Make it idempotent:** the hook re-fires after each nudge (with `changed_paths` for the same turn unchanged), so return `None` once its condition is satisfied — otherwise it just nudges until the bound is hit.
+
 **Use cases:** enforce "always run the formatter / `/clean` skill before finishing," require green checks for certain paths, block "done" until a changelog entry exists, run a project-specific round-end checklist.
 
 **Example — always run a tidy skill before finishing a coding turn:**
