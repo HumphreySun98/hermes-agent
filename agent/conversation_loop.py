@@ -4816,12 +4816,12 @@ def run_conversation(
                 # so a hook can't trap the loop; only fires when one is registered.
                 _stop_nudge = None
                 try:
-                    from agent.stop_hooks import max_stop_nudges, run_pre_stop_hooks
-                    from hermes_cli.plugins import has_hook
+                    from agent.stop_hooks import max_stop_nudges
+                    from hermes_cli.plugins import get_pre_stop_continue_message, has_hook
 
                     if has_hook("pre_stop") and getattr(agent, "_pre_stop_nudges", 0) < max_stop_nudges():
-                        _stop_nudge = run_pre_stop_hooks(
-                            session_id=getattr(agent, "session_id", None),
+                        _stop_nudge = get_pre_stop_continue_message(
+                            session_id=getattr(agent, "session_id", None) or "",
                             platform=getattr(agent, "platform", "") or "",
                             model=getattr(agent, "model", "") or "",
                             final_response=final_response,

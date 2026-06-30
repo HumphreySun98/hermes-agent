@@ -1,51 +1,18 @@
-"""Round-end stop hooks — a general "before the agent finishes" gate.
+"""Round-end stop policy — the bound on the ``pre_stop`` hook loop.
 
-Just before the agent loop accepts a final answer it fires the ``pre_stop``
-hook. A callback (Python plugin or shell hook) may return a directive asking the
-agent to keep going — run a check, tidy the diff, run a skill — instead of
-stopping::
-
-    {"action": "continue", "message": "<follow-up instruction for the model>"}
-
-The Claude-Code Stop-hook shape (``{"decision": "block", "reason": ...}``, where
-"block" means *block the stop*) is accepted too. Anything else lets the turn
-finish.
-
-This module is policy-only: it never runs anything itself, it just turns a
-hook's directive into a bounded synthetic follow-up — the same mechanism the
-verify-on-stop guard uses, which is now simply one built-in reason to continue
-rather than the only one. The loop is bounded by ``agent.max_stop_nudges`` so a
-hook that always says "continue" can't trap the agent.
+``agent/conversation_loop.py`` fires the ``pre_stop`` hook (resolved by
+:func:`hermes_cli.plugins.get_pre_stop_continue_message`) just before it accepts
+a final answer; a hook may keep the agent going — run a check, tidy the diff,
+run a skill — instead of stopping. This module holds the one piece of *agent*
+policy around that: the per-turn bound, so a hook that always says "continue"
+can never trap the loop. It sits next to its sibling ``agent/verification_stop.py``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 DEFAULT_MAX_STOP_NUDGES = 3
-
-# Verbs that mean "don't stop yet". ``continue`` is the canonical Hermes action;
-# ``block`` mirrors Claude-Code Stop hooks, where blocking the stop == keep going.
-_CONTINUE_ACTIONS = frozenset({"continue", "block"})
-
-
-def resolve_pre_stop_directive(results: Iterable[Any]) -> Optional[str]:
-    """First continue directive's message from a list of hook returns, or None.
-
-    Accepts the canonical ``{"action": "continue", "message": ...}`` and the
-    Claude-Code ``{"decision": "block", "reason": ...}`` shape. A directive with
-    no message is ignored — there's nothing to tell the model, so let it stop.
-    """
-    for ret in results:
-        if not isinstance(ret, dict):
-            continue
-        action = str(ret.get("action") or ret.get("decision") or "").strip().lower()
-        if action not in _CONTINUE_ACTIONS:
-            continue
-        message = ret.get("message") or ret.get("reason")
-        if isinstance(message, str) and message.strip():
-            return message.strip()
-    return None
 
 
 def max_stop_nudges(config: Optional[dict[str, Any]] = None) -> int:
@@ -65,19 +32,4 @@ def max_stop_nudges(config: Optional[dict[str, Any]] = None) -> int:
         return DEFAULT_MAX_STOP_NUDGES
 
 
-def run_pre_stop_hooks(**ctx: Any) -> Optional[str]:
-    """Fire ``pre_stop`` hooks and return the first continue message, or None."""
-    try:
-        from hermes_cli.plugins import invoke_hook
-
-        return resolve_pre_stop_directive(invoke_hook("pre_stop", **ctx))
-    except Exception:
-        return None
-
-
-__all__ = [
-    "DEFAULT_MAX_STOP_NUDGES",
-    "max_stop_nudges",
-    "resolve_pre_stop_directive",
-    "run_pre_stop_hooks",
-]
+__all__ = ["DEFAULT_MAX_STOP_NUDGES", "max_stop_nudges"]

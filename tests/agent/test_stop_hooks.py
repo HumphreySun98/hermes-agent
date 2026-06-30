@@ -1,40 +1,13 @@
-"""Unit tests for the round-end `pre_stop` hook policy (agent/stop_hooks.py)."""
+"""Unit tests for the round-end stop bound (agent/stop_hooks.py).
+
+The `pre_stop` directive aggregation lives in `hermes_cli.plugins`
+(`get_pre_stop_continue_message`) and is tested in `tests/hermes_cli/test_plugins.py`,
+alongside its sibling `get_pre_tool_call_block_message`.
+"""
 
 from __future__ import annotations
 
 from agent import stop_hooks
-
-
-class TestResolvePreStopDirective:
-    def test_canonical_continue_wins(self):
-        results = [{"action": "continue", "message": "run /clean"}]
-        assert stop_hooks.resolve_pre_stop_directive(results) == "run /clean"
-
-    def test_claude_block_means_continue(self):
-        # Claude-Code Stop hooks: "block" the stop == keep going; reason is the msg.
-        results = [{"decision": "block", "reason": "run the formatter"}]
-        assert stop_hooks.resolve_pre_stop_directive(results) == "run the formatter"
-
-    def test_first_actionable_directive_wins(self):
-        results = [
-            {"action": "continue"},                       # no message → skipped
-            None,                                         # non-dict → skipped
-            {"action": "continue", "message": "second"},
-            {"action": "continue", "message": "third"},
-        ]
-        assert stop_hooks.resolve_pre_stop_directive(results) == "second"
-
-    def test_message_is_trimmed(self):
-        results = [{"action": "continue", "message": "  tidy up  "}]
-        assert stop_hooks.resolve_pre_stop_directive(results) == "tidy up"
-
-    def test_no_directive_returns_none(self):
-        assert stop_hooks.resolve_pre_stop_directive([]) is None
-        assert stop_hooks.resolve_pre_stop_directive([{"action": "allow"}]) is None
-        assert stop_hooks.resolve_pre_stop_directive([{"context": "noise"}]) is None
-        # A continue with a blank/non-string message is a no-op.
-        assert stop_hooks.resolve_pre_stop_directive([{"action": "continue", "message": "   "}]) is None
-        assert stop_hooks.resolve_pre_stop_directive([{"action": "continue", "message": 42}]) is None
 
 
 class TestMaxStopNudges:

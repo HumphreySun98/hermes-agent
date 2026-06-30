@@ -2037,6 +2037,48 @@ def get_pre_tool_call_block_message(
     return None
 
 
+def get_pre_stop_continue_message(
+    *,
+    session_id: str = "",
+    platform: str = "",
+    model: str = "",
+    final_response: str = "",
+    changed_paths: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Check ``pre_stop`` hooks for a directive to keep the agent going.
+
+    Fired once per turn, just before the agent accepts a final answer. A hook
+    keeps the turn going (run a check, tidy the diff, run a skill) by returning::
+
+        {"action": "continue", "message": "<follow-up for the model>"}
+
+    The Claude-Code Stop shape ``{"decision": "block", "reason": "..."}`` (block
+    the stop == keep going) is accepted too. The first directive carrying a
+    non-empty message wins; any other return lets the turn finish. Mirrors
+    :func:`get_pre_tool_call_block_message` — the call site stays a one-liner.
+    """
+    hook_results = invoke_hook(
+        "pre_stop",
+        session_id=session_id,
+        platform=platform,
+        model=model,
+        final_response=final_response,
+        changed_paths=list(changed_paths or []),
+    )
+
+    for result in hook_results:
+        if not isinstance(result, dict):
+            continue
+        action = str(result.get("action") or result.get("decision") or "").strip().lower()
+        if action not in ("continue", "block"):
+            continue
+        message = result.get("message") or result.get("reason")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+
+    return None
+
+
 def _ensure_plugins_discovered(force: bool = False) -> PluginManager:
     """Return the global manager after ensuring plugin discovery has run.
 
