@@ -181,6 +181,7 @@ export const en: Translations = {
     muteHaptics: 'Mute haptics',
     unmuteHaptics: 'Unmute haptics',
     openSettings: 'Open settings',
+    openStarmap: 'Open star map',
     openKeybinds: 'Keyboard shortcuts'
   },
 
@@ -752,20 +753,31 @@ export const en: Translations = {
     failedToUpdate: name => `Failed to update ${name}`
   },
 
-  learning: {
-    title: 'Learning',
+  starmap: {
+    title: 'Star Map',
     subtitle: (nodes, clusters) => `${nodes} skills across ${clusters} categories`,
-    close: 'Close learning',
+    close: 'Close star map',
     refresh: 'Refresh',
     memory: 'Memory',
     filterAll: 'All',
     filterUsed: 'Used',
     filterLearned: 'Learned',
     viewGraph: 'Graph',
-    loadFailed: 'Could not load learning graph',
+    loadFailed: 'Could not load star map',
     loading: 'Loading…',
     emptyTitle: 'Nothing learned yet',
-    emptyDesc: 'As Hermes builds skills and memories for your work, they appear here.'
+    emptyDesc: 'As Hermes builds skills and memories for your work, they appear here.',
+    share: 'Share map',
+    shareTitle: 'Import / export map',
+    sharePlaceholder: 'Paste a map code…',
+    copy: 'Copy map code',
+    copied: 'Copied!',
+    importMap: 'Import a map',
+    importBtn: 'Load',
+    importEmpty: 'Paste a map code to load it.',
+    importSuccess: nodes => `Loaded a map with ${nodes} ${nodes === 1 ? 'node' : 'nodes'}.`,
+    importedBadge: 'imported map',
+    resetToMine: 'Back to my map'
   },
   agents: {
     close: 'Close agents',
@@ -1860,8 +1872,8 @@ export const en: Translations = {
       running: count => `${count} running`,
       cron: 'Cron',
       openCron: 'Open cron jobs',
-      learning: 'Learning',
-      openLearning: 'Open learning graph',
+      starmap: 'Star Map',
+      openStarmap: 'Open star map',
       turnRunning: 'Running',
       currentTurnElapsed: 'Current turn elapsed',
       contextUsage: 'Context usage',

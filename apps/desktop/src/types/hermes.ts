@@ -429,8 +429,8 @@ export interface UsageStats {
   total: number
 }
 
-/** One graph node in the learning graph (learned skill or memory chunk). */
-export interface LearningNode {
+/** One graph node in the star map (learned skill or memory chunk). */
+export interface StarmapNode {
   id: string
   label: string
   kind: 'memory' | 'skill'
@@ -444,29 +444,29 @@ export interface LearningNode {
 }
 
 /** A declared `related_skills` link; both endpoints are guaranteed to be nodes. */
-export interface LearningEdge {
+export interface StarmapEdge {
   source: string
   target: string
 }
 
-export interface LearningCluster {
+export interface StarmapCluster {
   category: string
   count: number
 }
 
 /** Freeform memory rendered as a card — never a graph node. */
-export interface LearningMemoryCard {
+export interface StarmapMemoryCard {
   source: 'memory' | 'profile'
   timestamp?: null | number
   title: string
   body: string
 }
 
-export interface LearningGraph {
-  nodes: LearningNode[]
-  edges: LearningEdge[]
-  clusters: LearningCluster[]
-  memory: LearningMemoryCard[]
+export interface StarmapGraph {
+  nodes: StarmapNode[]
+  edges: StarmapEdge[]
+  clusters: StarmapCluster[]
+  memory: StarmapMemoryCard[]
   stats: Record<string, unknown>
 }
 

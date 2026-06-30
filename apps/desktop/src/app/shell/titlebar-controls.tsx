@@ -19,7 +19,7 @@ import {
   toggleSidebarOpen
 } from '@/store/layout'
 
-import { appViewForPath, isOverlayView } from '../routes'
+import { appViewForPath, isOverlayView, STARMAP_ROUTE } from '../routes'
 
 import { titlebarButtonClass } from './titlebar'
 
@@ -95,6 +95,15 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
         togglePanesFlipped()
       },
       title: t.titlebar.swapSidebarSidesTitle
+    },
+    {
+      icon: <Codicon name="graph-scatter" />,
+      id: 'starmap',
+      label: t.titlebar.openStarmap,
+      onSelect: () => {
+        triggerHaptic('open')
+        navigate(STARMAP_ROUTE)
+      }
     },
     ...leftTools
   ]

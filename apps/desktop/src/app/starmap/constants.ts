@@ -1,14 +1,14 @@
-import type { LearningNode } from '@/types/hermes'
+import type { StarmapNode } from '@/types/hermes'
 
 import type { GraphParams, Rgb, RingParams, Shape } from './types'
 
 // ── Disk geometry ────────────────────────────────────────────────────────────
-export const RING_INNER = 48
+export const RING_INNER = 58
 export const RING_OUTER = 340
 export const ZOOM_MIN = 0.3
 export const ZOOM_MAX = 5
 export const FIT_PADDING = 80
-export const TILT = 0.6 // vertical squash → "looking down at a tilted disk"
+export const TILT = 1 // vertical squash → "looking down at a tilted disk"
 export const RING_STEPS = 4
 
 export const WHITE: Rgb = { b: 255, g: 255, r: 255 }
@@ -19,7 +19,7 @@ export const AGE_GRADIENT = { mid: 0.52, midInk: 0.74, newInk: 0.95, oldInk: 0.4
 
 // Node glyph per kind — pure path geometry (the seam a future sprite/instanced
 // renderer would bake from).
-export const NODE_SHAPE: Record<LearningNode['kind'], Shape> = { memory: 'diamond', skill: 'circle' }
+export const NODE_SHAPE: Record<StarmapNode['kind'], Shape> = { memory: 'diamond', skill: 'circle' }
 
 // Darken the orb body so a bright primary doesn't swallow the sheen (the
 // highlight is computed from the original ink, so it still reads).
@@ -35,8 +35,8 @@ export const LIT_BAND_ALPHA = 0.04
 
 export const MODE_DEFAULTS: Record<'dark' | 'light', GraphParams> = {
   dark: {
-    lineAlpha: 0.16,
-    lineDash: 1,
+    lineAlpha: 0.12,
+    lineDash: 1.5,
     lineDashed: true,
     lineWidth: 0.5,
     ringAlpha: 0.1,
@@ -46,7 +46,7 @@ export const MODE_DEFAULTS: Record<'dark' | 'light', GraphParams> = {
   },
   light: {
     lineAlpha: 0.18,
-    lineDash: 1,
+    lineDash: 1.5,
     lineDashed: true,
     lineWidth: 0.5,
     ringAlpha: 0.06,

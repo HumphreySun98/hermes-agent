@@ -181,7 +181,8 @@ export const ja = defineLocale({
     showRightSidebar: '右サイドバーを表示',
     muteHaptics: '触覚フィードバックをオフ',
     unmuteHaptics: '触覚フィードバックをオン',
-    openSettings: '設定を開く'
+    openSettings: '設定を開く',
+    openStarmap: 'スターマップを開く'
   },
 
   language: {
@@ -864,7 +865,7 @@ export const ja = defineLocale({
     failedToUpdate: name => `${name} の更新に失敗しました`
   },
 
-  learning: {
+  starmap: {
     title: '学習',
     subtitle: (nodes, clusters) => `${clusters} カテゴリの ${nodes} スキル`,
     close: '学習を閉じる',
@@ -1980,8 +1981,8 @@ export const ja = defineLocale({
       running: count => `${count} 実行中`,
       cron: 'Cron',
       openCron: 'Cron ジョブを開く',
-      learning: '学習',
-      openLearning: '学習グラフを開く',
+      starmap: '学習',
+      openStarmap: '学習グラフを開く',
       turnRunning: '実行中',
       currentTurnElapsed: '現在のターン経過時間',
       contextUsage: 'コンテキスト使用状況',

@@ -1,8 +1,28 @@
 import { darken, luminance, mixRgb, rgba } from './color'
-import { LIT_BAND_ALPHA, NODE_SHAPE, ORB_DARKEN, RING_PARAMS, TILT, WHITE, WHITEISH_SHEEN } from './constants'
+import {
+  LIT_BAND_ALPHA,
+  NODE_SHAPE,
+  ORB_DARKEN,
+  RING_INNER,
+  RING_PARAMS,
+  TILT,
+  WHITE,
+  WHITEISH_SHEEN
+} from './constants'
 import { clamp, nodeRadius, recencyInk, shapePath } from './geometry'
 import { countLabel, ellipsize, metaBadges, nodeFooter, wrapText } from './text'
-import type { FadeBuckets, MemoryCard, Palette, Rect, Rgb, Ring, RingLabelRect, SimLink, SimNode, Star, Viewport } from './types'
+import type {
+  FadeBuckets,
+  MemoryCard,
+  Palette,
+  Rect,
+  Rgb,
+  Ring,
+  RingLabelRect,
+  SimLink,
+  SimNode,
+  Viewport
+} from './types'
 
 export interface Scene {
   adjacency: Map<string, Set<string>>
@@ -18,10 +38,12 @@ export interface Scene {
   memById: Map<string, MemoryCard>
   nodes: SimNode[]
   palette: Palette
+  // Time scrubber: only paint nodes/links whose recency has been reached. 1 =
+  // everything (the default, idle state); lower values "build up" the map.
+  reveal: number
   rings: Ring[]
   selectedRing: null | number
   size: { h: number; w: number }
-  stars: Star[]
   vp: Viewport
 }
 
@@ -30,12 +52,38 @@ export interface DrawResult {
   ringLabelRects: RingLabelRect[]
 }
 
+// Smoothstep — eases the birth animations (position grow-out) in and out.
+const ease = (t: number): number => {
+  const u = t < 0 ? 0 : t > 1 ? 1 : t
+
+  return u * u * (3 - 2 * u)
+}
+
+// Layered birth speeds for the scrubber's parallax: rings expand slowly and
+// grandly in the background, stars pop in quicker up front — both well below the
+// default hover/focus speeds so the build-up reads as a cinematic settle.
+const RING_BIRTH = { down: 0.055, up: 0.032 }
+const NODE_BIRTH = { down: 0.11, up: 0.075 }
+
+// Glyph pool for the empty-core scramble: Matrix-style half-width katakana plus
+// a few digits/symbols for the "digital rain / decoding" look.
+const SCRAMBLE_CHARS =
+  'ﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾜﾝｦｱｳｴｵｶｷｹｺｻｼｽｾﾀﾁﾂﾃﾅﾆﾇﾈ0123456789:.=*+<>Ξ╳'
+
 // Fill the current path as a lit sphere: an offset radial gradient from a hot
 // core → darkened body → translucent rim, so a flat circle reads with volume.
 // `strength` is how white the core is; `bodyDarken` darkens the body (0 for
 // active/hover nodes so they pop full bright). Near-white inks skip the darken
 // and force a near-full sheen so the white core still reads.
-function sphereFill(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, ink: Rgb, strength: number, bodyDarken: number): void {
+function sphereFill(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  ink: Rgb,
+  strength: number,
+  bodyDarken: number
+): void {
   const mx = Math.max(ink.r, ink.g, ink.b)
   const mn = Math.min(ink.r, ink.g, ink.b)
   const sat = mx ? (mx - mn) / mx : 0
@@ -57,16 +105,59 @@ const rectsOverlap = (a: Rect, b: Rect) => a.x < b.x + b.w && a.x + a.w > b.x &&
 // canvas + advances the fade buckets); returns whether it's still animating and
 // the ring-label hit rects for pointer picking.
 export function drawScene(scene: Scene): DrawResult {
-  const { adjacency, byId, ctx, dpr, fades, focusId, hoverId, hoverLink, hoverRing, links, memById, nodes, palette, rings, selectedRing, size, stars, vp } = scene
+  const {
+    adjacency,
+    byId,
+    ctx,
+    dpr,
+    fades,
+    focusId,
+    hoverId,
+    hoverLink,
+    hoverRing,
+    links,
+    memById,
+    nodes,
+    palette,
+    reveal,
+    rings,
+    selectedRing,
+    size,
+    vp
+  } = scene
+
+  // Small epsilon so a node exactly at the playhead counts as revealed.
+  const seen = (rec: number) => rec <= reveal + 1e-3
+  // Recency for styling is RELATIVE to the newest revealed node — the current
+  // "present" — not the bare playhead. So a lone frontier node still reads as
+  // fresh (bright/full size) even with empty space between it and the scrubber.
+  // At reveal = 1 the frontier is the newest node, collapsing back to raw recency.
+  let frontier = 0
+
+  for (const fn of nodes) {
+    if (fn.rec <= reveal + 1e-3 && fn.rec > frontier) {
+      frontier = fn.rec
+    }
+  }
+
+  const erec = (rec: number) => (frontier > 0 ? clamp(rec / frontier, 0, 1) : 1)
   const { h, w } = size
-  const { bandInk, base, bg, c, chipBg, darkTheme, inkInv, memoryInk, skillInk } = palette
+  const { bandInk, base, bg, c, chipBg, darkTheme, inkInv, memoryInk, primary, skillInk } = palette
   const { bandAlpha, lightSize, ringAlpha, sheen } = RING_PARAMS[darkTheme ? 'dark' : 'light']
 
   let animating = false
   const ringLabelRects: RingLabelRect[] = []
 
   // Eased opacity per element: snaps up when newly highlighted, eases otherwise.
-  const fadeAlpha = (bucket: Map<string, number>, key: string, target: number, snapUp = false) => {
+  // `rates` overrides the default in/out lerp speed (the slow births pass their
+  // own gentler pair so the build-up reads as a graceful settle, not a flash).
+  const fadeAlpha = (
+    bucket: Map<string, number>,
+    key: string,
+    target: number,
+    snapUp = false,
+    rates?: { down: number; up: number }
+  ) => {
     const targetAlpha = clamp(target, 0, 1)
     const prev = bucket.get(key)
 
@@ -76,7 +167,9 @@ export function drawScene(scene: Scene): DrawResult {
       return targetAlpha
     }
 
-    const rate = targetAlpha > prev ? 0.22 : 0.32
+    const up = rates?.up ?? 0.22
+    const down = rates?.down ?? 0.32
+    const rate = targetAlpha > prev ? up : down
     const next = prev + (targetAlpha - prev) * rate
 
     if (Math.abs(next - targetAlpha) < 0.01) {
@@ -100,19 +193,13 @@ export function drawScene(scene: Scene): DrawResult {
   const focusSet = focusId ? (adjacency.get(focusId) ?? new Set<string>()) : null
   const ringIdx = selectedRing
   const ring = ringIdx != null ? (rings[ringIdx] ?? null) : null
+  // A selected ring owns the band it caps: previous ring → this ring. Ring 0 is
+  // visual-only/unlabeled, so the first selectable date naturally owns shell 0→1.
+  const ringLo = ring && ringIdx != null ? (rings[ringIdx - 1]?.ratio ?? 0) - 1e-3 : 0
+  const ringHi = ring ? ring.ratio + 1e-3 : 1
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, w, h)
-
-  // Starfield backdrop (screen space).
-  ctx.fillStyle = shade(1)
-
-  for (const s of stars) {
-    ctx.globalAlpha = s.a * (darkTheme ? 0.32 : 0.5)
-    ctx.beginPath()
-    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
-    ctx.fill()
-  }
 
   ctx.globalAlpha = 1
 
@@ -122,6 +209,39 @@ export function drawScene(scene: Scene): DrawResult {
   // The "lit" date = hovered (preview) or selected (locked) — drives the band
   // flatten only; the ring outline reacts to selection.
   const litRingIdx = hoverRing ?? ringIdx
+
+  // A ring is "laid" one band AHEAD of the playhead — it appears the moment the
+  // scrubber enters the band beneath it (its inner neighbor's date), so the date
+  // gridline that caps a region is always drawn before any node in that region.
+  // Ring 0 is just the visual core; the first real shell still needs non-zero
+  // playback progress so replay starts empty instead of showing it pre-laid.
+  const ringSeen = (i: number) => {
+    const threshold = rings[i - 1]?.ratio ?? 0
+
+    return i === 0 || (threshold <= 0 ? reveal > 1e-3 : reveal + 1e-3 >= threshold)
+  }
+
+  // Per-ring "grow out" progress (advanced once per frame, reused by bands /
+  // outlines / labels): a revealed ring eases its radius from its inner neighbor
+  // outward to its resting radius, so it expands into place instead of popping.
+  const ringAppear = rings.map((rg, i) =>
+    ease(fadeAlpha(fades.appear, `ring:${i}`, ringSeen(i) ? 1 : 0, false, RING_BIRTH))
+  )
+
+  // Direction-based origin (the sign of the reveal): a ring growing IN expands
+  // outward from its inner neighbour — never from the dead centre — while a ring
+  // fading OUT collapses all the way to the core. ringSeen is the direction tell:
+  // true = revealing/at rest, false = receding.
+  const ringDrawR = rings.map((rg, i) => {
+    const startR = ringSeen(i) ? (rings[i - 1]?.r ?? rg.r) : RING_INNER
+
+    return startR + (rg.r - startR) * (ringAppear[i] ?? 1)
+  })
+
+  // Opacity envelope that stays near-full through most of the grow/shrink and
+  // only fades in the final stretch — so the radius TRAVEL is visible (the ring
+  // shrinks back into place) instead of just dimming out where it stands.
+  const ringVis = ringAppear.map(a => clamp(a / 0.55, 0, 1))
 
   // Inter-ring bands: a theme-tinted wash sliver at the outer edge; the lit
   // date's band flattens to an even wash.
@@ -133,8 +253,13 @@ export function drawScene(scene: Scene): DrawResult {
         continue
       }
 
-      const inner = rings[i]?.r ?? 0
-      const outer = rings[i + 1]?.r ?? 0
+      // The band tracks its outer ring's grow-in.
+      if ((ringAppear[i + 1] ?? 1) <= 0.01) {
+        continue
+      }
+
+      const inner = ringDrawR[i] ?? 0
+      const outer = ringDrawR[i + 1] ?? 0
 
       if (lit) {
         ctx.fillStyle = rgba(bandInk, LIT_BAND_ALPHA)
@@ -159,16 +284,98 @@ export function drawScene(scene: Scene): DrawResult {
   ctx.setLineDash(c.ringDashed ? [c.ringDash / vp.k, c.ringDash / vp.k] : [])
   rings.forEach((rg, i) => {
     const emphasized = ringIdx != null && (i === ringIdx || i === ringIdx - 1)
-    const targetAlpha = emphasized ? clamp(LIT_BAND_ALPHA * 2, 0, 1) : ringAlpha
-    ctx.strokeStyle = shade(fadeAlpha(fades.rings, String(i), targetAlpha, emphasized))
+    // Reveal in/out rides the smooth (slow) ringAppear envelope so a ring fades
+    // out as gracefully as it grew in; the alpha bucket only carries the snappy
+    // selection emphasis.
+    const emphasisAlpha = emphasized ? clamp(LIT_BAND_ALPHA * 2, 0, 1) : ringAlpha
+    const ringAlphaNow = fadeAlpha(fades.rings, String(i), emphasisAlpha, emphasized) * (ringVis[i] ?? 1)
+
+    if (ringAlphaNow < 0.004) {
+      return
+    }
+
+    ctx.strokeStyle = shade(ringAlphaNow)
     ctx.beginPath()
-    ctx.arc(0, 0, rg.r, 0, Math.PI * 2)
+    ctx.arc(0, 0, ringDrawR[i] ?? rg.r, 0, Math.PI * 2)
     ctx.stroke()
   })
   ctx.setLineDash([])
 
-  // Screen space for jump routes + glyphs (crisp, easy to trim).
+  // Screen space for the core, jump routes, and glyphs (crisp, easy to trim).
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+  // Ring 0 is intentionally empty: computeRecency's lead-in keeps the oldest
+  // real data out in the first shell. Fill that gap with a tilted ASCII
+  // scramble — a decoding-glyph field laid on the disk plane (rows squashed by
+  // TILT, circular falloff) so the empty core reads as "computing", not missing.
+  // It animates continuously, so the draw loop is kept hot (animating = true).
+  const coreX = projX(0)
+  const coreY = projY(0)
+  // Fill to the innermost ring (the core shell), not the RING_INNER constant —
+  // the ring sits in lead-in space, so derive the radius from it directly.
+  const coreRx = (rings[0]?.r ?? RING_INNER) * vp.k * 0.94
+  const cell = clamp(coreRx * 0.2, 6, 11)
+  // Aspect-correct on the tilt: rows are spaced by the full glyph height (square
+  // cells, no vertical squish), but the field is clipped to the disk's ELLIPSE
+  // (vertical extent = coreRx * TILT), so it sits on the tilted plane while the
+  // glyphs themselves stay un-squished. Fewer rows fit vertically — that's it.
+  const coreRy = coreRx * TILT
+  const half = Math.max(3, Math.round(coreRx / cell))
+  const now = performance.now()
+
+  ctx.save()
+  ctx.font = `${cell}px "JetBrains Mono", "Hiragino Sans", "Noto Sans JP", ui-monospace, monospace`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  for (let r = -half; r <= half; r += 1) {
+    // Per-row flow: half the rows drift left, half right, each at its own speed.
+    // The drift is a continuous pixel scroll (not a per-cell swap), and each
+    // glyph's identity is tied to its slot index — so a character visibly slides
+    // across instead of the whole row flickering in place. Combined with the
+    // TILT squash + opposite directions, the field reads as a turning surface.
+    const rowSeed = (r * 19349663) >>> 0 || 1
+    const dir = rowSeed & 1 ? 1 : -1
+    const speed = 8 + (rowSeed % 16) // px/sec
+    const scroll = (now / 1000) * speed * dir
+    const ny = (r * cell) / coreRy
+    // Latitude dimming: rows away from the equator fade, selling the sphere read.
+    const rowDim = 1 - 0.5 * Math.min(1, Math.abs(ny))
+    const kMin = Math.floor((-coreRx - scroll) / cell) - 1
+    const kMax = Math.ceil((coreRx - scroll) / cell) + 1
+
+    for (let k = kMin; k <= kMax; k += 1) {
+      const sx = k * cell + scroll // screen-space x relative to the core center
+      const nx = sx / coreRx
+      const d2 = nx * nx + ny * ny
+
+      if (d2 > 1) {
+        continue
+      }
+
+      const seed = (rowSeed ^ ((k >>> 0) * 73856093)) >>> 0
+      const ch = SCRAMBLE_CHARS[seed % SCRAMBLE_CHARS.length] ?? '0'
+      // Mostly flat brightness, fading only near the rim (reduced gradient).
+      const edge = clamp((1 - Math.sqrt(d2)) / 0.4, 0, 1)
+      const flick = 0.7 + 0.3 * (((seed >>> 5) % 100) / 100)
+      // Fake depth: a stable per-slot value pops a subset of glyphs forward, so
+      // some characters read as nearer/brighter and drift across in front.
+      const depth = ((seed >>> 11) % 100) / 100
+      const pop = depth > 0.92 ? 2.6 : depth > 0.78 ? 1.6 : 1
+      const a = clamp((darkTheme ? 0.25 : 0.33) * edge * flick * rowDim * pop, 0, 0.85)
+
+      if (a < 0.02) {
+        continue
+      }
+
+      ctx.fillStyle = rgba(primary, a)
+      ctx.fillText(ch, coreX + sx, coreY + r * cell)
+    }
+  }
+
+  ctx.restore()
+  ctx.globalAlpha = 1
+  animating = true
 
   // Jump routes — a focused node's links stop at its selection ring.
   const focusNode = focusId ? (byId.get(focusId) ?? null) : null
@@ -182,7 +389,13 @@ export function drawScene(scene: Scene): DrawResult {
       continue
     }
 
-    const lit = !!focusId && (s.id === focusId || t.id === focusId || (!!focusSet && focusSet.has(s.id) && focusSet.has(t.id)))
+    // A jump route only exists once both of its endpoints have ignited.
+    const revealed = seen(s.rec) && seen(t.rec)
+
+    const lit =
+      revealed &&
+      !!focusId &&
+      (s.id === focusId || t.id === focusId || (!!focusSet && focusSet.has(s.id) && focusSet.has(t.id)))
 
     let x1 = projX(s.x)
     let y1 = projY(s.y)
@@ -202,10 +415,25 @@ export function drawScene(scene: Scene): DrawResult {
     }
 
     const key = `${s.id}->${t.id}`
-    const ambient = recencyInk((s.rec + t.rec) / 2) * c.lineAlpha
+    const ambient = recencyInk(erec((s.rec + t.rec) / 2)) * c.lineAlpha
+
     // Hovering a line fades it in a bit (×2, capped — never full white).
-    const targetAlpha = lit ? 1 : key === hoverLink ? clamp(ambient * 2, 0, 0.7) : focusId || ring ? 0.025 : ambient
+    const targetAlpha = !revealed
+      ? 0
+      : lit
+        ? 1
+        : key === hoverLink
+          ? clamp(ambient * 2, 0, 0.7)
+          : focusId || ring
+            ? 0.025
+            : ambient
+
     const linkAlpha = fadeAlpha(fades.links, key, targetAlpha, lit)
+
+    if (linkAlpha < 0.004) {
+      continue
+    }
+
     ctx.strokeStyle = shade(linkAlpha)
     ctx.setLineDash(lit || !c.lineDashed ? [] : [c.lineDash, c.lineDash])
     ctx.lineWidth = lit ? 1.5 : c.lineWidth
@@ -220,17 +448,46 @@ export function drawScene(scene: Scene): DrawResult {
   // Nodes: the node layer paints pure ink (focused node + neighbors); the date
   // filter is alpha-only, so the two states compose.
   for (const n of nodes) {
-    const isFocus = n.id === focusId
-    const isNeighbor = !!focusSet && focusSet.has(n.id)
-    const inRing = !!ring && Math.abs(n.rec - ring.ratio) <= 0.13
-    const nodeHigh = isFocus || isNeighbor
-    const ageScale = nodeHigh || inRing ? 1 : 0.34 + Math.min(1, n.rec / 0.4) * 0.66
-    const r = nodeRadius(n) * vp.k * ageScale
-    const sx = projX(n.x)
-    const sy = projY(n.y)
+    // The land comes first: a node waits for the ring that CAPS its region (its
+    // outer date gridline) to grow in before it ignites — so the ring is always
+    // drawn before any star inside it, not after.
+    let outerIdx = rings.length - 1
 
-    const targetAlpha = nodeHigh ? 1 : ring ? (inRing ? (focusId ? 0.55 : 1) : 0.16) : focusId ? 0.16 : recencyInk(n.rec)
-    ctx.globalAlpha = fadeAlpha(fades.nodes, n.id, targetAlpha, nodeHigh || inRing)
+    for (let i = rings.length - 1; i >= 0; i -= 1) {
+      if ((rings[i]?.ratio ?? 1) >= n.rec - 1e-3) {
+        outerIdx = i
+      }
+    }
+
+    const landLaid = (ringAppear[outerIdx] ?? 1) >= 0.5
+    const revealed = seen(n.rec) && landLaid
+    const isFocus = revealed && n.id === focusId
+    const isNeighbor = revealed && !!focusSet && focusSet.has(n.id)
+    const inRing = !!ring && n.rec >= ringLo && n.rec < ringHi
+    const nodeHigh = isFocus || isNeighbor
+    const er = erec(n.rec)
+    const ageScale = nodeHigh || inRing ? 1 : 0.34 + Math.min(1, er / 0.4) * 0.66
+    const r = nodeRadius(n) * vp.k * ageScale
+
+    const baseAlpha = nodeHigh ? 1 : ring ? (inRing ? (focusId ? 0.55 : 1) : 0.16) : focusId ? 0.16 : recencyInk(er)
+    const alpha = fadeAlpha(fades.nodes, n.id, revealed ? baseAlpha : 0, nodeHigh || inRing)
+
+    // Rise into place: a freshly revealed node eases outward from ~82% of its
+    // radius to its resting spot (world origin = the disk core), echoing the
+    // force-sim settle you get on a fresh load. Birth fade + rise are coupled
+    // (slow rates) so a star grows in instead of flashing. Focus snaps (no drift).
+    const born = ease(fadeAlpha(fades.appear, n.id, revealed ? 1 : 0, nodeHigh || inRing, NODE_BIRTH))
+    const vis = alpha * born
+
+    if (vis < 0.004) {
+      continue
+    }
+
+    const posScale = 0.82 + 0.18 * born
+    const sx = projX(n.x * posScale)
+    const sy = projY(n.y * posScale)
+
+    ctx.globalAlpha = vis
     const nodeInk = nodeHigh ? base : n.kind === 'memory' ? memoryInk : skillInk
     const shape = NODE_SHAPE[n.kind]
     shapePath(ctx, shape, sx, sy, r)
@@ -255,37 +512,54 @@ export function drawScene(scene: Scene): DrawResult {
   ctx.globalAlpha = 1
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-  // Ring date labels (top of each ellipse) — hoverable to focus the ring.
+  // Ring date labels (top of each ellipse) — hoverable to focus the ring. Many
+  // adaptive rings can crowd the top, so labels thin out: skip any that would
+  // land within LABEL_GAP of the last one drawn (the gridline still shows).
   ctx.font = '10px ui-sans-serif, system-ui, sans-serif'
   ctx.textAlign = 'center'
+  const LABEL_GAP = 15
+  let lastLabelY = Number.POSITIVE_INFINITY
   rings.forEach((rg, i) => {
     if (!rg.label) {
       return
     }
 
     const sx = projX(0)
-    const sy = projY(-rg.r)
+    // Track the growing radius so the date rides the ring as it expands out.
+    const sy = projY(-(ringDrawR[i] ?? rg.r))
 
-    if (sy < 8 || sy > h - 8) {
+    if (sy < 8 || sy > h - 8 || lastLabelY - sy < LABEL_GAP) {
       return
     }
 
+    lastLabelY = sy
     const tw = ctx.measureText(rg.label).width
     const boxW = tw + 6
     const isThis = ringIdx === i || hoverRing === i
     const faded = (focusId != null || ringIdx != null) && !isThis
-    ctx.globalAlpha = fadeAlpha(fades.labels, String(i), faded ? 0.33 : 1, isThis)
+    // The date rides the same smooth ringAppear envelope, so it recedes as
+    // gently as it appears; the bucket carries only the snappy focus/selection dim.
+    const emphasisAlpha = faded ? 0.33 : 1
+    const labelAlpha = fadeAlpha(fades.labels, String(i), emphasisAlpha, isThis) * (ringVis[i] ?? 1)
+
+    if (labelAlpha < 0.01) {
+      return
+    }
+
+    ctx.globalAlpha = labelAlpha
     ctx.fillStyle = rgba(bg, 1)
     ctx.fillRect(sx - boxW / 2, sy - 6, boxW, 13)
     ctx.fillStyle = shade(isThis ? 1 : 0.2)
     ctx.fillText(rg.label, sx, sy + 3)
     ctx.globalAlpha = 1
+    // Hidden labels (mid fade-out / not yet reached) drop out of hit-testing.
     ringLabelRects.push({ h: 18, i, w: boxW + 6, x: sx - boxW / 2 - 3, y: sy - 10 })
   })
 
   // Tooltip on focus — measured first so its rect joins the avoidance set and
   // neighbor labels route around it.
-  const tip = focusId ? byId.get(focusId) : null
+  const tipNode = focusId ? byId.get(focusId) : null
+  const tip = tipNode && seen(tipNode.rec) ? tipNode : null
   let tipRect: null | Rect = null
 
   if (tip) {
@@ -392,7 +666,7 @@ export function drawScene(scene: Scene): DrawResult {
 
     const n = byId.get(id)
 
-    if (!n) {
+    if (!n || !seen(n.rec)) {
       continue
     }
 

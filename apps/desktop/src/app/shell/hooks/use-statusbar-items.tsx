@@ -35,7 +35,7 @@ import {
 } from '@/store/updates'
 import type { StatusResponse } from '@/types/hermes'
 
-import { CRON_ROUTE, LEARNING_ROUTE } from '../../routes'
+import { CRON_ROUTE } from '../../routes'
 import type { StatusbarItem, StatusbarSelectModifiers } from '../statusbar-controls'
 
 interface StatusbarItemsOptions {
@@ -322,14 +322,6 @@ export function useStatusbarItems({
         label: copy.agents,
         onSelect: openAgents,
         title: agentsOpen ? copy.closeAgents : copy.openAgents,
-        variant: 'action'
-      },
-      {
-        className: 'w-7 justify-center px-0',
-        icon: <Codicon name="map" size="0.875rem" />,
-        id: 'learning',
-        title: copy.openLearning,
-        to: LEARNING_ROUTE,
         variant: 'action'
       },
       {

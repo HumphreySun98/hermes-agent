@@ -158,7 +158,7 @@ const AgentsView = lazy(async () => ({ default: (await import('./agents')).Agent
 const ArtifactsView = lazy(async () => ({ default: (await import('./artifacts')).ArtifactsView }))
 const CommandCenterView = lazy(async () => ({ default: (await import('./command-center')).CommandCenterView }))
 const CronView = lazy(async () => ({ default: (await import('./cron')).CronView }))
-const LearningView = lazy(async () => ({ default: (await import('./learning')).LearningView }))
+const StarmapView = lazy(async () => ({ default: (await import('./starmap')).StarmapView }))
 const MessagingView = lazy(async () => ({ default: (await import('./messaging')).MessagingView }))
 const ProfilesView = lazy(async () => ({ default: (await import('./profiles')).ProfilesView }))
 const SettingsView = lazy(async () => ({ default: (await import('./settings')).SettingsView }))
@@ -259,11 +259,11 @@ export function DesktopController() {
     commandCenterOpen,
     cronOpen,
     currentView,
-    learningOpen,
     openAgents,
     openCommandCenterSection,
     profilesOpen,
     settingsOpen,
+    starmapOpen,
     toggleCommandCenter
   } = useOverlayRouting()
 
@@ -1202,9 +1202,9 @@ export function DesktopController() {
         </Suspense>
       )}
 
-      {learningOpen && (
+      {starmapOpen && (
         <Suspense fallback={null}>
-          <LearningView onClose={closeOverlayToPreviousRoute} />
+          <StarmapView onClose={closeOverlayToPreviousRoute} />
         </Suspense>
       )}
     </>

@@ -175,7 +175,8 @@ export const zhHant = defineLocale({
     showRightSidebar: '顯示右側邊欄',
     muteHaptics: '靜音觸感回饋',
     unmuteHaptics: '開啟觸感回饋',
-    openSettings: '開啟設定'
+    openSettings: '開啟設定',
+    openStarmap: '開啟星圖'
   },
 
   language: {
@@ -836,7 +837,7 @@ export const zhHant = defineLocale({
     failedToUpdate: name => `更新 ${name} 失敗`
   },
 
-  learning: {
+  starmap: {
     title: '學習',
     subtitle: (nodes, clusters) => `${clusters} 個類別中的 ${nodes} 個技能`,
     close: '關閉學習',
@@ -1919,8 +1920,8 @@ export const zhHant = defineLocale({
       running: count => `${count} 個執行中`,
       cron: '排程',
       openCron: '開啟排程工作',
-      learning: '學習',
-      openLearning: '開啟學習圖譜',
+      starmap: '學習',
+      openStarmap: '開啟學習圖譜',
       turnRunning: '執行中',
       currentTurnElapsed: '目前回合已用時間',
       contextUsage: '上下文使用量',

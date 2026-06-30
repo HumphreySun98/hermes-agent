@@ -1,10 +1,11 @@
 import { forceCollide, forceLink, forceManyBody, forceRadial, forceSimulation, type Simulation } from 'd3-force'
 
-import type { LearningGraph, LearningNode } from '@/types/hermes'
+import type { StarmapGraph } from '@/types/hermes'
 
-import { RING_INNER, RING_OUTER, RING_STEPS } from './constants'
+import { RING_STEPS } from './constants'
 import { hash, nodeRadius, radiusForRecency } from './geometry'
 import { formatDate } from './text'
+import { computeRecency, recForRatio } from './time-axis'
 import type { Ring, SimLink, SimNode } from './types'
 
 export interface BuiltSim {
@@ -18,34 +19,11 @@ export interface BuiltSim {
 // Build the radial time simulation: a node's distance from the core encodes its
 // timestamp (radial force dominates; charge/collide only spread nodes around
 // their date ring). Rings are dated gridlines across the time span.
-export function buildSimulation(graph: LearningGraph, onTick: () => void): BuiltSim {
-  const known = graph.nodes
-    .map(n => (typeof n.timestamp === 'number' && Number.isFinite(n.timestamp) ? Number(n.timestamp) : null))
-    .filter((v): v is number => v !== null)
-
-  const minTs = known.length ? Math.min(...known) : null
-  const maxTs = known.length ? Math.max(...known) : null
-  const timed = minTs !== null && maxTs !== null && maxTs > minTs
-
-  const ordered = [...graph.nodes].sort((a, b) => {
-    const at = typeof a.timestamp === 'number' ? a.timestamp : Infinity
-    const bt = typeof b.timestamp === 'number' ? b.timestamp : Infinity
-
-    return at === bt ? a.id.localeCompare(b.id) : at - bt
-  })
-
-  const ordRatio = new Map(ordered.map((n, i) => [n.id, ordered.length > 1 ? i / (ordered.length - 1) : 0]))
-
-  const ratioFor = (n: LearningNode): number => {
-    if (timed && typeof n.timestamp === 'number' && minTs !== null && maxTs !== null) {
-      return (Number(n.timestamp) - minTs) / (maxTs - minTs)
-    }
-
-    return ordRatio.get(n.id) ?? 0
-  }
+export function buildSimulation(graph: StarmapGraph, onTick: () => void): BuiltSim {
+  const { maxTs, minTs, rec: recById, timed } = computeRecency(graph.nodes)
 
   const nodes: SimNode[] = graph.nodes.map(n => {
-    const rec = ratioFor(n)
+    const rec = recById.get(n.id) ?? 0
     const tr = radiusForRecency(rec)
     const angle = ((hash(n.id) % 3600) / 3600) * Math.PI * 2
 
@@ -81,9 +59,13 @@ export function buildSimulation(graph: LearningGraph, onTick: () => void): Built
   const rings: Ring[] = []
 
   for (let i = 0; i <= RING_STEPS; i += 1) {
-    const ratio = i / RING_STEPS
-    const r = RING_INNER + ratio * (RING_OUTER - RING_INNER)
-    const label = timed && minTs !== null && maxTs !== null ? formatDate(Math.round(minTs + (maxTs - minTs) * ratio)) : null
+    const frac = i / RING_STEPS
+    // Rings live in the SAME lead-in space as node recency, so a node dated F
+    // sits exactly on the ring dated F (and timeline ring-markers line up with
+    // the node bars). The date label still reflects the raw time fraction.
+    const ratio = recForRatio(frac)
+    const r = radiusForRecency(ratio)
+    const label = i > 0 && timed && minTs !== null && maxTs !== null ? formatDate(Math.round(minTs + (maxTs - minTs) * frac)) : null
 
     rings.push({ label, r, ratio })
   }

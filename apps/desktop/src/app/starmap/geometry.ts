@@ -1,4 +1,4 @@
-import type { LearningNode } from '@/types/hermes'
+import type { StarmapNode } from '@/types/hermes'
 
 import { AGE_GRADIENT, FIT_PADDING, RING_INNER, RING_OUTER, TILT, ZOOM_MAX, ZOOM_MIN } from './constants'
 import type { Shape, Viewport } from './types'
@@ -19,7 +19,7 @@ export function hash(input: string): number {
   return h >>> 0
 }
 
-export function nodeRadius(n: LearningNode): number {
+export function nodeRadius(n: StarmapNode): number {
   if (n.kind === 'memory') {
     return 4.4
   }
@@ -81,22 +81,27 @@ export function shapePath(ctx: CanvasRenderingContext2D, shape: Shape, x: number
   ctx.closePath()
 }
 
-// Center the tilted disk in the viewport at a fit zoom.
-export function fitViewport(w: number, h: number): Viewport {
+// Center the tilted disk in the viewport at a fit zoom. `outer` is the radius to
+// fit (defaults to the full disk); the scrubber passes the revealed extent so the
+// camera tightens at the core and zooms out as the rings grow.
+export function fitViewport(w: number, h: number, outer: number = RING_OUTER): Viewport {
   if (w <= 0 || h <= 0) {
     return { k: 1, x: w / 2, y: h / 2 }
   }
 
-  const spanX = (RING_OUTER + 30) * 2
+  const spanX = (outer + 30) * 2
   const spanY = spanX * TILT
   const k = clamp(Math.min((w - FIT_PADDING * 2) / spanX, (h - FIT_PADDING * 2) / spanY, 2.2), ZOOM_MIN, ZOOM_MAX)
 
-  return { k, x: w / 2, y: h / 2 }
+  // Bias the center down a touch — the timeline along the top adds visual weight
+  // up there, so true-center reads as sitting high.
+  return { k, x: w / 2, y: h / 2 + h * 0.05 }
 }
 
-// Target radius for a node at recency `rec` (oldest at the core).
-export function radiusForRecency(rec: number): number {
-  return RING_INNER + rec * (RING_OUTER - RING_INNER)
+// Target radius for a node at recency `rec` (oldest at the core), scaled to a
+// disk of the given outer radius.
+export function radiusForRecency(rec: number, outer: number = RING_OUTER): number {
+  return RING_INNER + rec * (outer - RING_INNER)
 }
 
 // Squared distance from point (px,py) to segment a→b — for cheap link hit-tests.

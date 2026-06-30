@@ -176,6 +176,7 @@ export const zh: Translations = {
     muteHaptics: '关闭触感反馈',
     unmuteHaptics: '开启触感反馈',
     openSettings: '打开设置',
+    openStarmap: '打开星图',
     openKeybinds: '键盘快捷键'
   },
 
@@ -936,7 +937,7 @@ export const zh: Translations = {
     failedToUpdate: name => `更新 ${name} 失败`
   },
 
-  learning: {
+  starmap: {
     title: '学习',
     subtitle: (nodes, clusters) => `${clusters} 个类别中的 ${nodes} 个技能`,
     close: '关闭学习',
@@ -949,7 +950,18 @@ export const zh: Translations = {
     loadFailed: '无法加载学习图谱',
     loading: '加载中…',
     emptyTitle: '尚无学习内容',
-    emptyDesc: '当 Hermes 为你的工作构建技能和记忆时，会显示在这里。'
+    emptyDesc: '当 Hermes 为你的工作构建技能和记忆时，会显示在这里。',
+    share: '分享图谱',
+    shareTitle: '导入 / 导出图谱',
+    sharePlaceholder: '粘贴图谱代码…',
+    copy: '复制图谱代码',
+    copied: '已复制！',
+    importMap: '导入图谱',
+    importBtn: '加载',
+    importEmpty: '粘贴图谱代码以加载。',
+    importSuccess: nodes => `已加载包含 ${nodes} 个节点的图谱。`,
+    importedBadge: '导入的图谱',
+    resetToMine: '返回我的图谱'
   },
   agents: {
     close: '关闭代理',
@@ -2031,8 +2043,8 @@ export const zh: Translations = {
       running: count => `${count} 个运行中`,
       cron: '排程',
       openCron: '打开排程任务',
-      learning: '学习',
-      openLearning: '打开学习图谱',
+      starmap: '学习',
+      openStarmap: '打开学习图谱',
       turnRunning: '运行中',
       currentTurnElapsed: '当前回合已用时间',
       contextUsage: '上下文用量',

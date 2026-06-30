@@ -1,8 +1,8 @@
 import type { SimulationLinkDatum, SimulationNodeDatum } from 'd3-force'
 
-import type { LearningGraph, LearningNode } from '@/types/hermes'
+import type { StarmapGraph, StarmapNode } from '@/types/hermes'
 
-export type MemoryCard = LearningGraph['memory'][number]
+export type MemoryCard = StarmapGraph['memory'][number]
 
 export type Shape = 'circle' | 'diamond' | 'hexagon' | 'square' | 'triangle'
 
@@ -25,7 +25,7 @@ export interface Rect {
   y: number
 }
 
-export interface SimNode extends LearningNode, SimulationNodeDatum {
+export interface SimNode extends StarmapNode, SimulationNodeDatum {
   rec: number // recency 0 (oldest) → 1 (newest)
   tr: number // time-anchored target radius
   x: number
@@ -66,6 +66,7 @@ export interface Palette {
   darkTheme: boolean
   inkInv: string
   memoryInk: Rgb
+  primary: Rgb
   skillInk: Rgb
 }
 
@@ -73,13 +74,6 @@ export interface Ring {
   label: null | string
   r: number
   ratio: number
-}
-
-export interface Star {
-  a: number
-  r: number
-  x: number
-  y: number
 }
 
 export interface RingLabelRect {
@@ -91,6 +85,10 @@ export interface RingLabelRect {
 }
 
 export interface FadeBuckets {
+  // Per-element "birth" progress 0→1 used to ease position (nodes rise outward
+  // into place, rings grow out) as the scrubber reveals them. Separate from the
+  // alpha buckets so it stays monotonic and isn't perturbed by focus/selection.
+  appear: Map<string, number>
   labels: Map<string, number>
   links: Map<string, number>
   nodes: Map<string, number>

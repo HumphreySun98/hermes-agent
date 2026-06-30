@@ -1,22 +1,75 @@
-import { useStore } from '@nanostores/react'
 import { type Simulation } from 'd3-force'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { createDoubleTapDetector, isSmartZoomWheel } from '@/lib/trackpad-gestures'
-import { $learningLoading, loadLearningGraph } from '@/store/learning'
-import type { LearningGraph } from '@/types/hermes'
+import type { StarmapGraph } from '@/types/hermes'
 
-import { computePalette } from './color'
-import { TILT, ZOOM_MAX, ZOOM_MIN } from './constants'
-import { clamp, distToSegmentSq, fitViewport, hash, nodeRadius } from './geometry'
+import { computePalette, memoryInkFor, resolveRgb, rgba } from './color'
+import { RING_OUTER, TILT, ZOOM_MAX, ZOOM_MIN } from './constants'
+import { clamp, distToSegmentSq, fitViewport, nodeRadius } from './geometry'
 import { drawScene } from './render'
+import { decodeShareCode, encodeShareCode, ShareCodeError } from './share-code'
+import { ShareControls } from './share-controls'
 import { buildSimulation } from './simulation'
-import type { FadeBuckets, MemoryCard, Palette, Ring, RingLabelRect, SimLink, SimNode, Star, Viewport } from './types'
+import { formatDate } from './text'
+import { buildTimeAxis, dateAtReveal } from './time-axis'
+import { Timeline } from './timeline'
+import type { FadeBuckets, MemoryCard, Palette, Ring, RingLabelRect, SimLink, SimNode, Viewport } from './types'
+
+// How long a full play-through sweep takes (ms), reveal 0 → 1. Longer = the
+// build-up breathes; the eased middle no longer rushes past in a blink.
+const SWEEP_MS = 15000
+
+// How far to relax the ease toward a flat linear march. The bare smoothstep
+// spikes to 1.5× linear speed mid-sweep, which reads as a "snap" through the
+// middle; blending it back toward linear flattens that peak (≈1.3× at GENTLE
+// = 0.45) so playback glides instead of lurching, while still keeping a soft
+// ease-in / ease-out at the very start and end.
+const GENTLE = 0.45
+
+// Cinematic timing: cubic smoothstep (gentle ease-in / ease-out) relaxed toward
+// linear by GENTLE, so the middle never rushes. Monotonic on [0,1], so the
+// numeric inverse below stays valid.
+function cineEase(t: number): number {
+  const u = t < 0 ? 0 : t > 1 ? 1 : t
+  const smooth = u * u * (3 - 2 * u)
+
+  return GENTLE * u + (1 - GENTLE) * smooth
+}
+
+// Numeric inverse (monotonic) so a resume maps the current reveal back to clock
+// progress without a closed-form solution.
+function invCineEase(y: number): number {
+  let lo = 0
+  let hi = 1
+
+  for (let i = 0; i < 24; i += 1) {
+    const mid = (lo + hi) / 2
+
+    if (cineEase(mid) < y) {
+      lo = mid
+    } else {
+      hi = mid
+    }
+  }
+
+  return (lo + hi) / 2
+}
 
 // A tilted, top-down star map of what Hermes has learned. Time is RADIAL: oldest
 // at the core, newest on the outer rings. This component owns the refs, effects
 // and pointer wiring; layout lives in simulation.ts and painting in render.ts.
-export function StarMap({ graph }: { graph: LearningGraph }) {
+export function StarMap({
+  graph,
+  imported = false,
+  onImport,
+  onResetMap
+}: {
+  graph: StarmapGraph
+  imported?: boolean
+  onImport?: (graph: StarmapGraph) => void
+  onResetMap?: () => void
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
 
@@ -28,9 +81,9 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
   const memByIdRef = useRef(new Map<string, MemoryCard>())
   const ringsRef = useRef<Ring[]>([])
   const ringLabelRectsRef = useRef<RingLabelRect[]>([])
-  const starsRef = useRef<Star[]>([])
 
   const fadeRef = useRef<FadeBuckets>({
+    appear: new Map(),
     labels: new Map(),
     links: new Map(),
     nodes: new Map(),
@@ -63,10 +116,66 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
 
   const [selectedId, setSelectedId] = useState<null | string>(null)
   const [size, setSize] = useState({ h: 0, w: 0 })
-  const loading = useStore($learningLoading)
+  // Bumped on theme change so the legend's memory swatch recomputes its color.
+  const [themeVersion, setThemeVersion] = useState(0)
+  // Memory's swatch color — the same complementary-of-primary the canvas uses,
+  // so the legend matches the rendered diamonds exactly.
+  const [memoryColor, setMemoryColor] = useState('var(--theme-secondary)')
+
+  // Time scrubber: reveal 1 = the whole map (idle default); lower values hide
+  // not-yet-reached nodes so playing/scrubbing "builds it up". The ref feeds the
+  // render loop; the state drives the timeline UI.
+  const [reveal, setReveal] = useState(1)
+  const [playing, setPlaying] = useState(false)
+  // Reveal positions where each dated ring spawns (its inner neighbor's ratio —
+  // ringSeen reveals one band ahead), surfaced as markers on the timeline.
+  const [ringStops, setRingStops] = useState<number[]>([])
+  const revealRef = useRef(1)
+  // Spore-style zoom: the camera fits the *leading ring's* radius, a step
+  // function of reveal. It holds steady while a band fills, then eases out to the
+  // next shell when a new ring is reached — growth in discrete jumps, not a
+  // constant creep. This ref is the camera's current (eased) fit radius.
+  const camRadiusRef = useRef(RING_OUTER)
+  const timeAxis = useMemo(() => buildTimeAxis(graph, 72), [graph])
+
+  // The scrubber's current moment, shown as the last legend row (a dated graph
+  // reads as a date; an undated one falls back to a revealed/total count).
+  const revealLabel = useMemo(() => {
+    const date = dateAtReveal(timeAxis, reveal)
+
+    return date !== null ? formatDate(date) : `${Math.round(reveal * timeAxis.size)} / ${timeAxis.size}`
+  }, [reveal, timeAxis])
+
+  // The current map as a WoW-style share code, recomputed only when the graph
+  // changes (encode walks every node/edge/card, so don't redo it per render).
+  const shareCode = useMemo(() => encodeShareCode(graph), [graph])
+
+  // Decode a pasted code and hand the resulting graph up to the StarmapView,
+  // which swaps it in for the live profile scan. Returns an error string for the
+  // Timeline to surface inline, or null on success.
+  const importCode = useCallback(
+    (code: string): null | string => {
+      try {
+        const next = decodeShareCode(code)
+        onImport?.(next)
+
+        return null
+      } catch (err) {
+        return err instanceof ShareCodeError ? err.message : 'Could not read that map code.'
+      }
+    },
+    [onImport]
+  )
 
   // Mark the canvas dirty and wake the (otherwise-idle) render loop.
   const invalidate = useCallback(() => invalidateRef.current(), [])
+
+  // Drop every in-flight ease so the next frame snaps to its targets.
+  const resetFades = useCallback(() => {
+    for (const bucket of Object.values(fadeRef.current)) {
+      bucket.clear()
+    }
+  }, [])
 
   const memById = useMemo(() => {
     const m = new Map<string, MemoryCard>()
@@ -120,10 +229,9 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
     linksRef.current = links
     byIdRef.current = byId
     ringsRef.current = rings
-    fadeRef.current.labels.clear()
-    fadeRef.current.links.clear()
-    fadeRef.current.nodes.clear()
-    fadeRef.current.rings.clear()
+    // Markers fire when a ring spawns: ringSeen(i) flips at rings[i-1].ratio.
+    setRingStops(rings.map((rg, i) => (rg.label != null ? (rings[i - 1]?.ratio ?? 0) : -1)).filter(v => v >= 0))
+    resetFades()
     viewportRef.current = fitViewport(size.w, size.h)
     invalidate()
 
@@ -139,23 +247,7 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
         simRef.current = null
       }
     }
-  }, [graph, invalidate, size])
-
-  // Seed the starfield from the size (stable per dimensions).
-  useEffect(() => {
-    const count = clamp(Math.round((size.w * size.h) / 8000), 50, 200)
-    starsRef.current = Array.from({ length: count }, (_, i) => {
-      const s = hash(`star-${i}-${size.w}x${size.h}`)
-
-      return {
-        a: 0.1 + ((s >>> 18) % 55) / 100,
-        r: 0.4 + ((s >>> 8) % 12) / 12,
-        x: s % Math.max(1, size.w),
-        y: (s >>> 12) % Math.max(1, size.h)
-      }
-    })
-    invalidate()
-  }, [invalidate, size])
+  }, [graph, invalidate, resetFades, size])
 
   useEffect(() => {
     adjacencyRef.current = adjacency
@@ -163,15 +255,180 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
     invalidate()
   }, [adjacency, invalidate, memById])
 
+  // The empty-core ASCII scramble uses the bundled JetBrains Mono face. Canvas
+  // text doesn't reflow when a webfont loads, so repaint once it's ready.
+  useEffect(() => {
+    document.fonts?.load('1em "JetBrains Mono"').then(invalidate, () => {})
+  }, [invalidate])
+
   useEffect(() => {
     selectedIdRef.current = selectedId
     invalidate()
   }, [invalidate, selectedId])
 
+  // Mirror reveal into the ref the render loop reads, and repaint.
+  useEffect(() => {
+    revealRef.current = reveal
+    invalidate()
+  }, [invalidate, reveal])
+
+  // A fresh graph resets the scrubber to "fully built" (the idle default).
+  useEffect(() => {
+    camRadiusRef.current = RING_OUTER
+    setReveal(1)
+    setPlaying(false)
+  }, [graph])
+
+  // The stepped fit radius for a reveal: the radius of the leading ring (the
+  // first not-yet-passed shell, or the outermost once we're near the end). It
+  // only changes when reveal crosses a ring boundary — that's the Spore "step".
+  const targetRadius = useCallback((rev: number): number => {
+    const rings = ringsRef.current
+
+    if (!rings.length) {
+      return RING_OUTER
+    }
+
+    return (rings.find(rg => rg.ratio > rev + 1e-3) ?? rings[rings.length - 1]!).r
+  }, [])
+
+  const applyFit = useCallback((radius: number) => {
+    const { h, w } = sizeRef.current
+
+    if (w > 0 && h > 0) {
+      viewportRef.current = fitViewport(w, h, radius)
+    }
+  }, [])
+
+  // Snap the camera to a reveal's stepped target (scrubbing / reset — no glide).
+  const fitForReveal = useCallback(
+    (rev: number) => {
+      camRadiusRef.current = targetRadius(rev)
+      applyFit(camRadiusRef.current)
+    },
+    [applyFit, targetRadius]
+  )
+
+  // Playback: sweep reveal 0 → 1 over SWEEP_MS, then stop (play once).
+  useEffect(() => {
+    if (!playing) {
+      return
+    }
+
+    let raf = 0
+    let start = 0
+
+    const step = (now: number) => {
+      if (!start) {
+        // Anchor (in clock-space) so a resume continues from the current reveal.
+        start = now - invCineEase(revealRef.current) * SWEEP_MS
+      }
+
+      const progress = Math.min(1, (now - start) / SWEEP_MS)
+      const next = cineEase(progress)
+
+      // Ease the camera toward the leading ring's radius (a step target): it
+      // holds while a band fills, then pushes out when the next shell is reached.
+      const target = targetRadius(next)
+      camRadiusRef.current += (target - camRadiusRef.current) * 0.1
+      applyFit(camRadiusRef.current)
+      setReveal(next)
+
+      // End once the reveal is complete AND the camera has settled on the final
+      // shell, so the last push-out finishes instead of cutting off.
+      if (progress >= 1 && Math.abs(target - camRadiusRef.current) < 0.5) {
+        camRadiusRef.current = target
+        applyFit(target)
+        setPlaying(false)
+
+        return
+      }
+
+      raf = requestAnimationFrame(step)
+    }
+
+    raf = requestAnimationFrame(step)
+
+    return () => cancelAnimationFrame(raf)
+  }, [applyFit, playing, targetRadius])
+
+  const onTogglePlay = useCallback(() => {
+    if (playing) {
+      setPlaying(false)
+
+      return
+    }
+
+    // Replay from the start when parked at the end. Snap straight to the empty
+    // state (no fade-out) before playing in.
+    if (revealRef.current >= 1) {
+      resetFades()
+      fitForReveal(0)
+      setReveal(0)
+    }
+
+    setPlaying(true)
+  }, [fitForReveal, playing, resetFades])
+
+  const onScrub = useCallback(
+    (value: number) => {
+      const next = clamp(value, 0, 1)
+      setPlaying(false)
+      // Scrubbing snaps the camera straight to the reveal's stepped target (no
+      // glide), so dragging doesn't lurch from a stale position.
+      fitForReveal(next)
+      setReveal(next)
+    },
+    [fitForReveal]
+  )
+
+  // Spacebar toggles playback (unless typing, or the play button itself is
+  // focused — that already handles Space natively, so skip to avoid a double).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' && e.key !== ' ') {
+        return
+      }
+
+      const el = document.activeElement
+      const tag = el?.tagName
+
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || (el as HTMLElement | null)?.isContentEditable) {
+        return
+      }
+
+      e.preventDefault()
+      onTogglePlay()
+    }
+
+    window.addEventListener('keydown', onKey)
+
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onTogglePlay])
+
+  // Recompute the legend's memory swatch from the live --theme-primary (matches
+  // the canvas), re-running on theme change and once the canvas is mounted.
+  useEffect(() => {
+    const el = canvasRef.current ?? wrapRef.current
+
+    if (!el) {
+      return
+    }
+
+    const style = getComputedStyle(el)
+    const val = style.getPropertyValue('--theme-primary').trim()
+
+    if (val) {
+      const bgVal = style.getPropertyValue('--background').trim() || style.getPropertyValue('--dt-background').trim() || '#000'
+      setMemoryColor(rgba(memoryInkFor(resolveRgb(val), resolveRgb(bgVal)), 0.9))
+    }
+  }, [size, themeVersion])
+
   // Repaint + repalette when the theme/mode changes (class + inline vars on <html>).
   useEffect(() => {
     const mo = new MutationObserver(() => {
       themeDirtyRef.current = true
+      setThemeVersion(v => v + 1)
       invalidate()
     })
 
@@ -187,6 +444,11 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
   // view calls invalidate(); a draw that's still animating reschedules itself.
   useEffect(() => {
     let raf = 0
+    // Continuous self-animation (the core scramble) only needs ~30fps; cap it so
+    // the idle loop isn't a 60fps full-scene redraw. Interaction bypasses the cap.
+    const ANIM_MS = 1000 / 30
+    let lastAnimTs = 0
+    let force = true
 
     const schedule = () => {
       if (!raf) {
@@ -221,10 +483,10 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
         memById: memByIdRef.current,
         nodes: nodesRef.current,
         palette: paletteRef.current,
+        reveal: revealRef.current,
         rings: ringsRef.current,
         selectedRing: selectedRingRef.current,
         size: sizeRef.current,
-        stars: starsRef.current,
         vp: viewportRef.current
       })
 
@@ -233,13 +495,22 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
       return animating
     }
 
-    const frame = () => {
+    const frame = (ts: number) => {
       raf = 0
 
       if (!dirtyRef.current) {
         return
       }
 
+      // Throttle animation-only frames; an interaction (force) always draws now.
+      if (!force && ts - lastAnimTs < ANIM_MS) {
+        schedule()
+
+        return
+      }
+
+      force = false
+      lastAnimTs = ts
       dirtyRef.current = draw()
 
       if (dirtyRef.current) {
@@ -249,6 +520,7 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
 
     invalidateRef.current = () => {
       dirtyRef.current = true
+      force = true
       schedule()
     }
 
@@ -347,6 +619,7 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
   }
 
   const resetView = () => {
+    setPlaying(false)
     viewportRef.current = fitViewport(sizeRef.current.w, sizeRef.current.h)
     selectedRingRef.current = null
     invalidate()
@@ -384,12 +657,6 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
         invalidate()
       }
 
-      const canvas = canvasRef.current
-
-      if (canvas) {
-        canvas.style.cursor = id || ringHit != null ? 'pointer' : 'crosshair'
-      }
-
       return
     }
 
@@ -401,6 +668,11 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
     }
 
     if (drag.mode === 'pan') {
+      // Taking manual control of the camera ends an auto-fit play-through.
+      if (drag.moved) {
+        setPlaying(false)
+      }
+
       viewportRef.current = { ...drag.vp, x: drag.vp.x + dx, y: drag.vp.y + dy }
       invalidate()
     }
@@ -457,6 +729,9 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
       return
     }
 
+    // Manual zoom takes over the camera from any auto-fit play-through.
+    setPlaying(false)
+
     const px = e.clientX - rect.left
     const py = e.clientY - rect.top
     const vp = viewportRef.current
@@ -468,7 +743,7 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden" ref={wrapRef}>
       <canvas
-        className="block cursor-crosshair touch-none select-none text-foreground"
+        className="block touch-none select-none text-foreground"
         onDoubleClick={resetView}
         onMouseDown={onMouseDown}
         onMouseLeave={onMouseLeave}
@@ -478,30 +753,28 @@ export function StarMap({ graph }: { graph: LearningGraph }) {
         ref={canvasRef}
       />
 
-      <div className="pointer-events-none absolute left-2 top-2 flex flex-col gap-1 bg-background/40 px-2 py-1.5 text-[0.62rem] text-muted-foreground backdrop-blur-sm">
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1">
-            <span className="inline-block size-2 rounded-full bg-[var(--theme-primary)]/80" /> skill
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="inline-block size-2 rotate-45 bg-[var(--theme-secondary)]/80" /> memory
-          </span>
-        </div>
-        <div className="text-[0.58rem] text-muted-foreground/65">core = oldest · outer rings = newer</div>
+      {/* Timeline scrubber — centered along the top, clear of the close button.
+          z-20 lifts it above the titlebar's app-region drag layer (z-10) so the
+          scrubber receives pointer events instead of dragging the window. */}
+      <div className="pointer-events-none absolute inset-x-0 top-6 z-20 flex justify-center px-12">
+        <Timeline axis={timeAxis} onScrub={onScrub} onTogglePlay={onTogglePlay} playing={playing} reveal={reveal} ringStops={ringStops} />
       </div>
 
-      <div className="absolute right-3 top-2 flex items-center gap-3 text-[0.65rem]">
-        <button className="text-muted-foreground hover:text-foreground" onClick={resetView} type="button">
-          Reset view
-        </button>
-        <button
-          className="text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
-          disabled={loading}
-          onClick={() => void loadLearningGraph(true)}
-          type="button"
-        >
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+      {/* Share / import (WoW-talent-style code) — bottom-right, mirroring the legend. */}
+      <div className="pointer-events-auto absolute bottom-2 right-2 z-20 [-webkit-app-region:no-drag]">
+        <ShareControls imported={imported} onImport={importCode} onResetMap={onResetMap} shareCode={shareCode} />
+      </div>
+
+      {/* Legend — bottom-left, one entry per line like a conventional key. */}
+      <div className="pointer-events-none absolute bottom-2 left-2 flex flex-col gap-1 text-[0.62rem] text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block size-2 rounded-full bg-[var(--theme-primary)]/80" /> skill
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block size-2 rotate-45" style={{ backgroundColor: memoryColor }} /> memory
+        </span>
+        <span className="text-[0.58rem] text-muted-foreground/65">core = oldest · outer = newer</span>
+        <span className="tabular-nums text-foreground/75">{revealLabel}</span>
       </div>
     </div>
   )

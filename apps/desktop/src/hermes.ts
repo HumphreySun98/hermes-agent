@@ -17,7 +17,6 @@ import type {
   EnvVarInfo,
   HermesConfig,
   HermesConfigRecord,
-  LearningGraph,
   LogsResponse,
   MemoryProviderConfig,
   MemoryProviderOAuthStatus,
@@ -42,6 +41,7 @@ import type {
   SessionMessagesResponse,
   SessionSearchResponse,
   SkillInfo,
+  StarmapGraph,
   StatusResponse,
   ToolsetConfig,
   ToolsetInfo
@@ -78,7 +78,6 @@ export type {
   GatewayReadyPayload,
   HermesConfig,
   HermesConfigRecord,
-  LearningGraph,
   LogsResponse,
   MemoryProviderConfig,
   MemoryProviderOAuthStatus,
@@ -115,6 +114,7 @@ export type {
   SessionSearchResult,
   SkillInfo,
   StaleAuxAssignment,
+  StarmapGraph,
   StatusResponse,
   ToolsetConfig,
   ToolsetInfo
@@ -491,9 +491,11 @@ export function getSkills(): Promise<SkillInfo[]> {
   })
 }
 
-export function getLearningGraph(): Promise<LearningGraph> {
-  return window.hermesDesktop.api<LearningGraph>({
+export function getStarmapGraph(): Promise<StarmapGraph> {
+  return window.hermesDesktop.api<StarmapGraph>({
     ...profileScoped(),
+    // Backend REST contract — stays /api/learning even though the UI feature is
+    // now "star map". Renaming this would break against an un-upgraded backend.
     path: '/api/learning/graph'
   })
 }

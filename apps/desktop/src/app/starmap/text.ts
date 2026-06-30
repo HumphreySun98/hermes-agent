@@ -1,4 +1,4 @@
-import type { LearningNode } from '@/types/hermes'
+import type { StarmapNode } from '@/types/hermes'
 
 export function formatDate(ts?: null | number): string {
   if (!ts) {
@@ -14,7 +14,7 @@ export function formatDate(ts?: null | number): string {
 
 // Tag-style badge items for the hover tooltip — date first. Use-count is NOT a
 // badge (rendered separately, right-aligned) so it's excluded here.
-export function metaBadges(n: LearningNode): string[] {
+export function metaBadges(n: StarmapNode): string[] {
   const out: string[] = [formatDate(n.timestamp)]
 
   if (n.kind === 'memory') {
@@ -35,14 +35,14 @@ export function metaBadges(n: LearningNode): string[] {
 }
 
 // Bare "xN" use-count, last in the badge row. Null when never used.
-export function countLabel(n: LearningNode): null | string {
+export function countLabel(n: StarmapNode): null | string {
   return n.kind === 'skill' && n.useCount > 0 ? `x${n.useCount}` : null
 }
 
 // Footer-row content for the tooltip. Reserved primitive — returns nothing for
 // now (skills have no UUID; their id is just the name). Wire real detail here
 // later and the tooltip lays it out automatically.
-export function nodeFooter(node: LearningNode): null | string {
+export function nodeFooter(node: StarmapNode): null | string {
   void node
 
   return null
